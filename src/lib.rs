@@ -1,35 +1,7 @@
 #![crate_name = "gba_slotmap"]
-#![cfg_attr(all(nightly, feature = "unstable"), feature(try_reserve))]
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 #![cfg_attr(all(nightly, doc), feature(doc_cfg))]
-#![warn(
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unused_lifetimes,
-    unused_import_braces
-)]
 #![deny(missing_docs, unaligned_references)]
-#![cfg_attr(feature = "cargo-clippy", allow(renamed_and_removed_lints))]
-#![cfg_attr(feature = "cargo-clippy", deny(clippy, clippy_pedantic))]
-#![cfg_attr(
-    feature = "cargo-clippy",
-    allow(
-        // Style differences.
-        module_name_repetitions,
-        redundant_closure_for_method_calls,
-        unseparated_literal_suffix,
-
-        // I know what I'm doing and want these.
-        wildcard_imports,
-        inline_always,
-        cast_possible_truncation,
-        needless_pass_by_value,
-
-        // Very noisy.
-        missing_errors_doc,
-        must_use_candidate
-    ))]
 
 //! # slotmap
 //!

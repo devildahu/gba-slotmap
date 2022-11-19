@@ -1,9 +1,19 @@
 use core::fmt::Debug;
 use core::hint::unreachable_unchecked;
 
+#[derive(Debug)]
+pub enum SlotMapError {
+    OutOfCapacity,
+}
+
 /// Internal stable replacement for !.
 #[derive(Debug)]
 pub enum Never {}
+impl From<SlotMapError> for Never {
+    fn from(_: SlotMapError) -> Self {
+        unreachable!()
+    }
+}
 
 /// Returns if a is an older version than b, taking into account wrapping of
 /// versions.

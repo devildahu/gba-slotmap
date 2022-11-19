@@ -1,7 +1,5 @@
 //! Contains the secondary map implementation.
 
-#[cfg(all(nightly, any(doc, feature = "unstable")))]
-use alloc::collections::TryReserveError;
 use core::hint::unreachable_unchecked;
 use core::iter::{Enumerate, Extend, FromIterator, FusedIterator};
 use core::marker::PhantomData;
@@ -124,7 +122,7 @@ pub struct SecondaryMap<K: Key, V, const U: usize> {
     _k: PhantomData<fn(K) -> K>,
 }
 
-impl<K: Key, V> SecondaryMap<K, V> {
+impl<K: Key, V, const U: usize> SecondaryMap<K, V, U> {
     /// Constructs a new, empty [`SecondaryMap`].
     ///
     /// # Examples
@@ -134,25 +132,7 @@ impl<K: Key, V> SecondaryMap<K, V> {
     /// let mut sec: SecondaryMap<DefaultKey, i32> = SecondaryMap::new();
     /// ```
     pub fn new() -> Self {
-        Self::with_capacity(0)
-    }
-
-    /// Creates an empty [`SecondaryMap`] with the given capacity of slots.
-    ///
-    /// The secondary map will not reallocate until it holds at least `capacity`
-    /// slots. Even inserting a single key-value pair might require as many
-    /// slots as the slot map the key comes from, so it's recommended to match
-    /// the capacity of a secondary map to its corresponding slot map.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// let mut sm: SlotMap<_, i32> = SlotMap::with_capacity(10);
-    /// let mut sec: SecondaryMap<DefaultKey, i32> = SecondaryMap::with_capacity(sm.capacity());
-    /// ```
-    pub fn with_capacity(capacity: usize) -> Self {
-        let mut slots = Vec::with_capacity(capacity + 1); // Sentinel.
+        let mut slots = Vec::new(); // Sentinel.
         slots.push(Slot::new_vacant());
         Self { slots, num_elems: 0, _k: PhantomData }
     }
@@ -185,78 +165,6 @@ impl<K: Key, V> SecondaryMap<K, V> {
     /// ```
     pub fn is_empty(&self) -> bool {
         self.num_elems == 0
-    }
-
-    /// Returns the number of elements the [`SecondaryMap`] can hold without
-    /// reallocating.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// let mut sec: SecondaryMap<DefaultKey, i32> = SecondaryMap::with_capacity(10);
-    /// assert!(sec.capacity() >= 10);
-    /// ```
-    pub fn capacity(&self) -> usize {
-        self.slots.capacity() - 1 // Sentinel.
-    }
-
-    /// Sets the capacity of the [`SecondaryMap`] to `new_capacity`, if it is
-    /// bigger than the current capacity.
-    ///
-    /// It is recommended to set the capacity of a [`SecondaryMap`] to the
-    /// capacity of its corresponding slot map before inserting many new
-    /// elements to prevent frequent reallocations. The collection may reserve
-    /// more space than requested.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new allocation size overflows [`usize`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// let mut sec: SecondaryMap<DefaultKey, i32> = SecondaryMap::with_capacity(10);
-    /// assert!(sec.capacity() >= 10);
-    /// sec.set_capacity(1000);
-    /// assert!(sec.capacity() >= 1000);
-    /// ```
-    pub fn set_capacity(&mut self, new_capacity: usize) {
-        let new_capacity = new_capacity + 1; // Sentinel.
-        if new_capacity > self.slots.capacity() {
-            let needed = new_capacity - self.slots.len();
-            self.slots.reserve(needed);
-        }
-    }
-
-    /// Tries to set the capacity of the [`SecondaryMap`] to `new_capacity`, if it
-    /// is bigger than the current capacity.
-    ///
-    /// It is recommended to set the capacity of a [`SecondaryMap`] to the
-    /// capacity of its corresponding slot map before inserting many new
-    /// elements to prevent frequent reallocations. The collection may reserve
-    /// more space than requested.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// let mut sec: SecondaryMap<DefaultKey, i32> = SecondaryMap::with_capacity(10);
-    /// assert!(sec.capacity() >= 10);
-    /// sec.try_set_capacity(1000).unwrap();
-    /// assert!(sec.capacity() >= 1000);
-    /// ```
-    #[cfg(all(nightly, any(doc, feature = "unstable")))]
-    #[cfg_attr(all(nightly, doc), doc(cfg(feature = "unstable")))]
-    pub fn try_set_capacity(&mut self, new_capacity: usize) -> Result<(), TryReserveError> {
-        let new_capacity = new_capacity + 1; // Sentinel.
-        if new_capacity > self.slots.capacity() {
-            let needed = new_capacity - self.slots.len();
-            self.slots.try_reserve(needed)
-        } else {
-            Ok(())
-        }
     }
 
     /// Returns [`true`] if the secondary map contains `key`.
@@ -452,7 +360,7 @@ impl<K: Key, V> SecondaryMap<K, V> {
     /// assert_eq!(sec.len(), 0);
     /// assert_eq!(v, vec![(k, 1)]);
     /// ```
-    pub fn drain(&mut self) -> Drain<K, V> {
+    pub fn drain(&mut self) -> Drain<K, V, U> {
         Drain { cur: 1, sm: self }
     }
 
@@ -813,7 +721,7 @@ impl<K: Key, V> SecondaryMap<K, V> {
     /// let v = sec.entry(k).unwrap().or_insert(10);
     /// assert_eq!(*v, 10);
     /// ```
-    pub fn entry(&mut self, key: K) -> Option<Entry<K, V>> {
+    pub fn entry(&mut self, key: K) -> Option<Entry<K, V, U>> {
         if key.is_null() {
             return None;
         }
@@ -844,13 +752,13 @@ impl<K: Key, V> SecondaryMap<K, V> {
     }
 }
 
-impl<K: Key, V> Default for SecondaryMap<K, V> {
+impl<K: Key, V, const U: usize> Default for SecondaryMap<K, V, U> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Key, V> Index<K> for SecondaryMap<K, V> {
+impl<K: Key, V, const U: usize> Index<K> for SecondaryMap<K, V, U> {
     type Output = V;
 
     fn index(&self, key: K) -> &V {
@@ -861,7 +769,7 @@ impl<K: Key, V> Index<K> for SecondaryMap<K, V> {
     }
 }
 
-impl<K: Key, V> IndexMut<K> for SecondaryMap<K, V> {
+impl<K: Key, V, const U: usize> IndexMut<K> for SecondaryMap<K, V, U> {
     fn index_mut(&mut self, key: K) -> &mut V {
         match self.get_mut(key) {
             Some(r) => r,
@@ -870,7 +778,7 @@ impl<K: Key, V> IndexMut<K> for SecondaryMap<K, V> {
     }
 }
 
-impl<K: Key, V: PartialEq> PartialEq for SecondaryMap<K, V> {
+impl<K: Key, V: PartialEq, const U: usize> PartialEq for SecondaryMap<K, V, U> {
     fn eq(&self, other: &Self) -> bool {
         if self.len() != other.len() {
             return false;
@@ -884,9 +792,9 @@ impl<K: Key, V: PartialEq> PartialEq for SecondaryMap<K, V> {
     }
 }
 
-impl<K: Key, V: Eq> Eq for SecondaryMap<K, V> {}
+impl<K: Key, V: Eq, const U: usize> Eq for SecondaryMap<K, V, U> {}
 
-impl<K: Key, V> FromIterator<(K, V)> for SecondaryMap<K, V> {
+impl<K: Key, V, const U: usize> FromIterator<(K, V)> for SecondaryMap<K, V, U> {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut sec = Self::new();
         sec.extend(iter);
@@ -894,7 +802,7 @@ impl<K: Key, V> FromIterator<(K, V)> for SecondaryMap<K, V> {
     }
 }
 
-impl<K: Key, V> Extend<(K, V)> for SecondaryMap<K, V> {
+impl<K: Key, V, const U: usize> Extend<(K, V)> for SecondaryMap<K, V, U> {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         let iter = iter.into_iter();
         for (k, v) in iter {
@@ -903,7 +811,7 @@ impl<K: Key, V> Extend<(K, V)> for SecondaryMap<K, V> {
     }
 }
 
-impl<'a, K: Key, V: 'a + Copy> Extend<(K, &'a V)> for SecondaryMap<K, V> {
+impl<'a, K: Key, V: 'a + Copy, const U: usize> Extend<(K, &'a V)> for SecondaryMap<K, V, U> {
     fn extend<I: IntoIterator<Item = (K, &'a V)>>(&mut self, iter: I) {
         let iter = iter.into_iter();
         for (k, v) in iter {
@@ -915,8 +823,8 @@ impl<'a, K: Key, V: 'a + Copy> Extend<(K, &'a V)> for SecondaryMap<K, V> {
 /// A view into a occupied entry in a [`SecondaryMap`]. It is part of the
 /// [`Entry`] enum.
 #[derive(Debug)]
-pub struct OccupiedEntry<'a, K: Key, V> {
-    map: &'a mut SecondaryMap<K, V>,
+pub struct OccupiedEntry<'a, K: Key, V, const U: usize> {
+    map: &'a mut SecondaryMap<K, V, U>,
     kd: KeyData,
     _k: PhantomData<fn(K) -> K>,
 }
@@ -924,8 +832,8 @@ pub struct OccupiedEntry<'a, K: Key, V> {
 /// A view into a vacant entry in a [`SecondaryMap`]. It is part of the
 /// [`Entry`] enum.
 #[derive(Debug)]
-pub struct VacantEntry<'a, K: Key, V> {
-    map: &'a mut SecondaryMap<K, V>,
+pub struct VacantEntry<'a, K: Key, V, const U: usize> {
+    map: &'a mut SecondaryMap<K, V, U>,
     kd: KeyData,
     _k: PhantomData<fn(K) -> K>,
 }
@@ -935,15 +843,15 @@ pub struct VacantEntry<'a, K: Key, V> {
 ///
 /// This `enum` is constructed using [`SecondaryMap::entry`].
 #[derive(Debug)]
-pub enum Entry<'a, K: Key, V> {
+pub enum Entry<'a, K: Key, V, const U: usize> {
     /// An occupied entry.
-    Occupied(OccupiedEntry<'a, K, V>),
+    Occupied(OccupiedEntry<'a, K, V, U>),
 
     /// A vacant entry.
-    Vacant(VacantEntry<'a, K, V>),
+    Vacant(VacantEntry<'a, K, V, U>),
 }
 
-impl<'a, K: Key, V> Entry<'a, K, V> {
+impl<'a, K: Key, V, const U: usize> Entry<'a, K, V, U> {
     /// Ensures a value is in the entry by inserting the default if empty, and
     /// returns a mutable reference to the value in the entry.
     ///
@@ -1036,7 +944,7 @@ impl<'a, K: Key, V> Entry<'a, K, V> {
     }
 }
 
-impl<'a, K: Key, V: Default> Entry<'a, K, V> {
+impl<'a, K: Key, V: Default, const U: usize> Entry<'a, K, V, U> {
     /// Ensures a value is in the entry by inserting the default value if empty,
     /// and returns a mutable reference to the value in the entry.
     ///
@@ -1056,7 +964,7 @@ impl<'a, K: Key, V: Default> Entry<'a, K, V> {
     }
 }
 
-impl<'a, K: Key, V> OccupiedEntry<'a, K, V> {
+impl<'a, K: Key, V, const U: usize> OccupiedEntry<'a, K, V, U> {
     /// Returns this entry's key.
     ///
     /// # Examples
@@ -1227,7 +1135,7 @@ impl<'a, K: Key, V> OccupiedEntry<'a, K, V> {
     }
 }
 
-impl<'a, K: Key, V> VacantEntry<'a, K, V> {
+impl<'a, K: Key, V, const U: usize> VacantEntry<'a, K, V, U> {
     /// Gets the key that would be used when inserting a value through the
     /// [`VacantEntry`].
     ///
@@ -1286,8 +1194,8 @@ impl<'a, K: Key, V> VacantEntry<'a, K, V> {
 ///
 /// This iterator is created by [`SecondaryMap::drain`].
 #[derive(Debug)]
-pub struct Drain<'a, K: Key + 'a, V: 'a> {
-    sm: &'a mut SecondaryMap<K, V>,
+pub struct Drain<'a, K: Key + 'a, V: 'a, const U: usize> {
+    sm: &'a mut SecondaryMap<K, V, U>,
     cur: usize,
 }
 
@@ -1296,9 +1204,9 @@ pub struct Drain<'a, K: Key + 'a, V: 'a> {
 /// This iterator is created by calling the `into_iter` method on [`SecondaryMap`],
 /// provided by the [`IntoIterator`] trait.
 #[derive(Debug)]
-pub struct IntoIter<K: Key, V> {
+pub struct IntoIter<K: Key, V, const U: usize> {
     num_left: usize,
-    slots: Enumerate<arrayvec::IntoIter<Slot<V>>>,
+    slots: Enumerate<arrayvec::IntoIter<Slot<V>, U>>,
     _k: PhantomData<fn(K) -> K>,
 }
 
@@ -1368,7 +1276,7 @@ pub struct ValuesMut<'a, K: Key + 'a, V: 'a> {
     inner: IterMut<'a, K, V>,
 }
 
-impl<'a, K: Key, V> Iterator for Drain<'a, K, V> {
+impl<'a, K: Key, V, const U: usize> Iterator for Drain<'a, K, V, U> {
     type Item = (K, V);
 
     fn next(&mut self) -> Option<(K, V)> {
@@ -1390,13 +1298,13 @@ impl<'a, K: Key, V> Iterator for Drain<'a, K, V> {
     }
 }
 
-impl<'a, K: Key, V> Drop for Drain<'a, K, V> {
+impl<'a, K: Key, V, const U: usize> Drop for Drain<'a, K, V, U> {
     fn drop(&mut self) {
         self.for_each(|_drop| {});
     }
 }
 
-impl<K: Key, V> Iterator for IntoIter<K, V> {
+impl<K: Key, V, const U: usize> Iterator for IntoIter<K, V, U> {
     type Item = (K, V);
 
     fn next(&mut self) -> Option<(K, V)> {
@@ -1492,7 +1400,7 @@ impl<'a, K: Key, V> Iterator for ValuesMut<'a, K, V> {
     }
 }
 
-impl<'a, K: Key, V> IntoIterator for &'a SecondaryMap<K, V> {
+impl<'a, K: Key, V, const U: usize> IntoIterator for &'a SecondaryMap<K, V, U> {
     type Item = (K, &'a V);
     type IntoIter = Iter<'a, K, V>;
 
@@ -1501,7 +1409,7 @@ impl<'a, K: Key, V> IntoIterator for &'a SecondaryMap<K, V> {
     }
 }
 
-impl<'a, K: Key, V> IntoIterator for &'a mut SecondaryMap<K, V> {
+impl<'a, K: Key, V, const U: usize> IntoIterator for &'a mut SecondaryMap<K, V, U> {
     type Item = (K, &'a mut V);
     type IntoIter = IterMut<'a, K, V>;
 
@@ -1510,9 +1418,9 @@ impl<'a, K: Key, V> IntoIterator for &'a mut SecondaryMap<K, V> {
     }
 }
 
-impl<K: Key, V> IntoIterator for SecondaryMap<K, V> {
+impl<K: Key, V, const U: usize> IntoIterator for SecondaryMap<K, V, U> {
     type Item = (K, V);
-    type IntoIter = IntoIter<K, V>;
+    type IntoIter = IntoIter<K, V, U>;
 
     fn into_iter(self) -> Self::IntoIter {
         let len = self.len();
@@ -1527,16 +1435,16 @@ impl<'a, K: Key, V> FusedIterator for IterMut<'a, K, V> {}
 impl<'a, K: Key, V> FusedIterator for Keys<'a, K, V> {}
 impl<'a, K: Key, V> FusedIterator for Values<'a, K, V> {}
 impl<'a, K: Key, V> FusedIterator for ValuesMut<'a, K, V> {}
-impl<'a, K: Key, V> FusedIterator for Drain<'a, K, V> {}
-impl<K: Key, V> FusedIterator for IntoIter<K, V> {}
+impl<'a, K: Key, V, const U: usize> FusedIterator for Drain<'a, K, V, U> {}
+impl<K: Key, V, const U: usize> FusedIterator for IntoIter<K, V, U> {}
 
 impl<'a, K: Key, V> ExactSizeIterator for Iter<'a, K, V> {}
 impl<'a, K: Key, V> ExactSizeIterator for IterMut<'a, K, V> {}
 impl<'a, K: Key, V> ExactSizeIterator for Keys<'a, K, V> {}
 impl<'a, K: Key, V> ExactSizeIterator for Values<'a, K, V> {}
 impl<'a, K: Key, V> ExactSizeIterator for ValuesMut<'a, K, V> {}
-impl<'a, K: Key, V> ExactSizeIterator for Drain<'a, K, V> {}
-impl<K: Key, V> ExactSizeIterator for IntoIter<K, V> {}
+impl<'a, K: Key, V, const U: usize> ExactSizeIterator for Drain<'a, K, V, U> {}
+impl<K: Key, V, const U: usize> ExactSizeIterator for IntoIter<K, V, U> {}
 
 #[cfg(test)]
 mod tests {

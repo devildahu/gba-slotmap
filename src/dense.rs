@@ -6,14 +6,12 @@
 // are valid. Keys that are received from the user are not trusted (as they
 // might have come from a different slot map or malicious serde deseralization).
 
-#[cfg(all(nightly, any(doc, feature = "unstable")))]
-use alloc::collections::TryReserveError;
 use core::iter::FusedIterator;
 #[allow(unused_imports)] // MaybeUninit is only used on nightly at the moment.
 use core::mem::MaybeUninit;
 use core::ops::{Index, IndexMut};
 
-use crate::util::{Never, UnwrapUnchecked};
+use crate::util::{Never, SlotMapError, UnwrapUnchecked};
 use crate::vec::Vec;
 use crate::{DefaultKey, Key, KeyData};
 
@@ -39,7 +37,7 @@ pub struct DenseSlotMap<K: Key, V, const U: usize> {
     free_head: u16,
 }
 
-impl<V> DenseSlotMap<DefaultKey, V> {
+impl<V, const U: usize> DenseSlotMap<DefaultKey, V, U> {
     /// Construct a new, empty [`DenseSlotMap`].
     ///
     /// # Examples
@@ -49,26 +47,11 @@ impl<V> DenseSlotMap<DefaultKey, V> {
     /// let mut sm: DenseSlotMap<_, i32> = DenseSlotMap::new();
     /// ```
     pub fn new() -> Self {
-        Self::with_capacity_and_key(0)
-    }
-
-    /// Creates an empty [`DenseSlotMap`] with the given capacity.
-    ///
-    /// The slot map will not reallocate until it holds at least `capacity`
-    /// elements.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// let mut sm: DenseSlotMap<_, i32> = DenseSlotMap::with_capacity(10);
-    /// ```
-    pub fn with_capacity(capacity: usize) -> DenseSlotMap<DefaultKey, V> {
-        Self::with_capacity_and_key(capacity)
+        Self::with_key()
     }
 }
 
-impl<K: Key, V> DenseSlotMap<K, V> {
+impl<K: Key, V, const U: usize> DenseSlotMap<K, V, U> {
     /// Constructs a new, empty [`DenseSlotMap`] with a custom key type.
     ///
     /// # Examples
@@ -81,38 +64,16 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     /// let mut positions: DenseSlotMap<PositionKey, i32> = DenseSlotMap::with_key();
     /// ```
     pub fn with_key() -> Self {
-        Self::with_capacity_and_key(0)
-    }
-
-    /// Creates an empty [`DenseSlotMap`] with the given capacity and a custom key
-    /// type.
-    ///
-    /// The slot map will not reallocate until it holds at least `capacity`
-    /// elements.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// new_key_type! {
-    ///     struct MessageKey;
-    /// }
-    /// let mut messages = DenseSlotMap::with_capacity_and_key(3);
-    /// let welcome: MessageKey = messages.insert("Welcome");
-    /// let good_day = messages.insert("Good day");
-    /// let hello = messages.insert("Hello");
-    /// ```
-    pub fn with_capacity_and_key(capacity: usize) -> Self {
         // Create slots with a sentinel at index 0.
         // We don't actually use the sentinel for anything currently, but
         // HopSlotMap does, and if we want keys to remain valid through
         // conversion we have to have one as well.
-        let mut slots = Vec::with_capacity(capacity + 1);
+        let mut slots = Vec::new();
         slots.push(Slot { idx_or_free: 0, version: 0 });
 
         DenseSlotMap {
-            keys: Vec::with_capacity(capacity),
-            values: Vec::with_capacity(capacity),
+            keys: Vec::new(),
+            values: Vec::new(),
             slots,
             free_head: 1,
         }
@@ -124,7 +85,7 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     ///
     /// ```
     /// # use slotmap::*;
-    /// let mut sm = DenseSlotMap::with_capacity(10);
+    /// let mut sm = DenseSlotMap::new();
     /// sm.insert("len() counts actual elements, not capacity");
     /// let key = sm.insert("removed elements don't count either");
     /// sm.remove(key);
@@ -148,68 +109,6 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     /// ```
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
-    }
-
-    /// Returns the number of elements the [`DenseSlotMap`] can hold without
-    /// reallocating.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// let sm: DenseSlotMap<_, f64> = DenseSlotMap::with_capacity(10);
-    /// assert_eq!(sm.capacity(), 10);
-    /// ```
-    pub fn capacity(&self) -> usize {
-        self.keys.capacity()
-    }
-
-    /// Reserves capacity for at least `additional` more elements to be inserted
-    /// in the [`DenseSlotMap`]. The collection may reserve more space to
-    /// avoid frequent reallocations.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new allocation size overflows [`usize`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// let mut sm = DenseSlotMap::new();
-    /// sm.insert("foo");
-    /// sm.reserve(32);
-    /// assert!(sm.capacity() >= 33);
-    /// ```
-    pub fn reserve(&mut self, additional: usize) {
-        self.keys.reserve(additional);
-        self.values.reserve(additional);
-        // One slot is reserved for the sentinel.
-        let needed = (self.len() + additional).saturating_sub(self.slots.len() - 1);
-        self.slots.reserve(needed);
-    }
-
-    /// Tries to reserve capacity for at least `additional` more elements to be
-    /// inserted in the [`DenseSlotMap`]. The collection may reserve more space to
-    /// avoid frequent reallocations.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use slotmap::*;
-    /// let mut sm = DenseSlotMap::new();
-    /// sm.insert("foo");
-    /// sm.try_reserve(32).unwrap();
-    /// assert!(sm.capacity() >= 33);
-    /// ```
-    #[cfg(all(nightly, any(doc, feature = "unstable")))]
-    #[cfg_attr(all(nightly, doc), doc(cfg(feature = "unstable")))]
-    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.keys.try_reserve(additional)?;
-        self.values.try_reserve(additional)?;
-        // One slot is reserved for the sentinel.
-        let needed = (self.len() + additional).saturating_sub(self.slots.len() - 1);
-        self.slots.try_reserve(needed)
     }
 
     /// Returns [`true`] if the slot map contains `key`.
@@ -304,7 +203,7 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     ///
     /// sm.try_insert_with_key::<_, ()>(|k| Err(())).unwrap_err();
     /// ```
-    pub fn try_insert_with_key<F, E>(&mut self, f: F) -> Result<K, E>
+    pub fn try_insert_with_key<F, E: From<SlotMapError>>(&mut self, f: F) -> Result<K, E>
     where
         F: FnOnce(K) -> Result<V, E>,
     {
@@ -319,24 +218,32 @@ impl<K: Key, V> DenseSlotMap<K, V> {
             let key = KeyData::new(idx, occupied_version).into();
 
             // Push value before adjusting slots/freelist in case f panics or returns an error.
-            self.values.push(f(key)?);
-            self.keys.push(key);
+            self.values
+                .try_push(f(key)?)
+                .map_err(|_| SlotMapError::OutOfCapacity)?;
+            // SAFETY: self.keys always has the same item count as self.values
+            unsafe { self.keys.push_unchecked(key) };
             self.free_head = slot.idx_or_free;
             slot.idx_or_free = self.keys.len() as u16 - 1;
             slot.version = occupied_version;
-            return Ok(key);
+            Ok(key)
+        } else {
+            // Push value before adjusting slots/freelist in case f panics or returns an error.
+            let key = KeyData::new(idx, 1).into();
+            self.values
+                .try_push(f(key)?)
+                .map_err(|_| SlotMapError::OutOfCapacity)?;
+            // SAFETY: self.keys always has the same item count as self.values
+            unsafe { self.keys.push_unchecked(key) };
+            let slot = Slot {
+                version: 1,
+                idx_or_free: self.keys.len() as u16 - 1,
+            };
+            // SAFETY: self.keys always has the same item count as self.slots
+            unsafe { self.slots.push_unchecked(slot) };
+            self.free_head = self.slots.len() as u16;
+            Ok(key)
         }
-
-        // Push value before adjusting slots/freelist in case f panics or returns an error.
-        let key = KeyData::new(idx, 1).into();
-        self.values.push(f(key)?);
-        self.keys.push(key);
-        self.slots.push(Slot {
-            version: 1,
-            idx_or_free: self.keys.len() as u16 - 1,
-        });
-        self.free_head = self.slots.len() as u16;
-        Ok(key)
     }
 
     // Helper function to add a slot to the freelist. Returns the index that
@@ -470,7 +377,7 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     /// assert_eq!(sm.len(), 0);
     /// assert_eq!(v, vec![(k, 0)]);
     /// ```
-    pub fn drain(&mut self) -> Drain<K, V> {
+    pub fn drain(&mut self) -> Drain<K, V, U> {
         Drain { sm: self }
     }
 
@@ -794,7 +701,7 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     }
 }
 
-impl<K: Key, V> Clone for DenseSlotMap<K, V>
+impl<K: Key, V, const U: usize> Clone for DenseSlotMap<K, V, U>
 where
     V: Clone,
 {
@@ -815,13 +722,13 @@ where
     }
 }
 
-impl<K: Key, V> Default for DenseSlotMap<K, V> {
+impl<K: Key, V, const U: usize> Default for DenseSlotMap<K, V, U> {
     fn default() -> Self {
         Self::with_key()
     }
 }
 
-impl<K: Key, V> Index<K> for DenseSlotMap<K, V> {
+impl<K: Key, V, const U: usize> Index<K> for DenseSlotMap<K, V, U> {
     type Output = V;
 
     fn index(&self, key: K) -> &V {
@@ -832,7 +739,7 @@ impl<K: Key, V> Index<K> for DenseSlotMap<K, V> {
     }
 }
 
-impl<K: Key, V> IndexMut<K> for DenseSlotMap<K, V> {
+impl<K: Key, V, const U: usize> IndexMut<K> for DenseSlotMap<K, V, U> {
     fn index_mut(&mut self, key: K) -> &mut V {
         match self.get_mut(key) {
             Some(r) => r,
@@ -846,8 +753,8 @@ impl<K: Key, V> IndexMut<K> for DenseSlotMap<K, V> {
 ///
 /// This iterator is created by [`DenseSlotMap::drain`].
 #[derive(Debug)]
-pub struct Drain<'a, K: 'a + Key, V: 'a> {
-    sm: &'a mut DenseSlotMap<K, V>,
+pub struct Drain<'a, K: 'a + Key, V: 'a, const U: usize> {
+    sm: &'a mut DenseSlotMap<K, V, U>,
 }
 
 /// An iterator that moves key-value pairs out of a [`DenseSlotMap`].
@@ -855,9 +762,9 @@ pub struct Drain<'a, K: 'a + Key, V: 'a> {
 /// This iterator is created by calling the `into_iter` method on [`DenseSlotMap`],
 /// provided by the [`IntoIterator`] trait.
 #[derive(Debug, Clone)]
-pub struct IntoIter<K, V> {
-    inner_keys: arrayvec::IntoIter<K>,
-    inner_values: arrayvec::IntoIter<V>,
+pub struct IntoIter<K, V, const U: usize> {
+    inner_keys: arrayvec::IntoIter<K, U>,
+    inner_values: arrayvec::IntoIter<V, U>,
 }
 
 /// An iterator over the key-value pairs in a [`DenseSlotMap`].
@@ -923,7 +830,7 @@ pub struct ValuesMut<'a, K: 'a + Key, V: 'a> {
     inner: IterMut<'a, K, V>,
 }
 
-impl<'a, K: Key, V> Iterator for Drain<'a, K, V> {
+impl<'a, K: Key, V, const U: usize> Iterator for Drain<'a, K, V, U> {
     type Item = (K, V);
 
     fn next(&mut self) -> Option<(K, V)> {
@@ -945,13 +852,13 @@ impl<'a, K: Key, V> Iterator for Drain<'a, K, V> {
     }
 }
 
-impl<'a, K: Key, V> Drop for Drain<'a, K, V> {
+impl<'a, K: Key, V, const U: usize> Drop for Drain<'a, K, V, U> {
     fn drop(&mut self) {
         self.for_each(|_drop| {});
     }
 }
 
-impl<K: Key, V> Iterator for IntoIter<K, V> {
+impl<K: Key, V, const U: usize> Iterator for IntoIter<K, V, U> {
     type Item = (K, V);
 
     fn next(&mut self) -> Option<(K, V)> {
@@ -1044,7 +951,7 @@ impl<'a, K: 'a + Key, V> Iterator for ValuesMut<'a, K, V> {
     }
 }
 
-impl<'a, K: 'a + Key, V> IntoIterator for &'a DenseSlotMap<K, V> {
+impl<'a, K: 'a + Key, V, const U: usize> IntoIterator for &'a DenseSlotMap<K, V, U> {
     type Item = (K, &'a V);
     type IntoIter = Iter<'a, K, V>;
 
@@ -1053,7 +960,7 @@ impl<'a, K: 'a + Key, V> IntoIterator for &'a DenseSlotMap<K, V> {
     }
 }
 
-impl<'a, K: 'a + Key, V> IntoIterator for &'a mut DenseSlotMap<K, V> {
+impl<'a, K: 'a + Key, V, const U: usize> IntoIterator for &'a mut DenseSlotMap<K, V, U> {
     type Item = (K, &'a mut V);
     type IntoIter = IterMut<'a, K, V>;
 
@@ -1062,9 +969,9 @@ impl<'a, K: 'a + Key, V> IntoIterator for &'a mut DenseSlotMap<K, V> {
     }
 }
 
-impl<K: Key, V> IntoIterator for DenseSlotMap<K, V> {
+impl<K: Key, V, const U: usize> IntoIterator for DenseSlotMap<K, V, U> {
     type Item = (K, V);
-    type IntoIter = IntoIter<K, V>;
+    type IntoIter = IntoIter<K, V, U>;
 
     fn into_iter(self) -> Self::IntoIter {
         IntoIter {
@@ -1079,16 +986,16 @@ impl<'a, K: 'a + Key, V> FusedIterator for IterMut<'a, K, V> {}
 impl<'a, K: 'a + Key, V> FusedIterator for Keys<'a, K, V> {}
 impl<'a, K: 'a + Key, V> FusedIterator for Values<'a, K, V> {}
 impl<'a, K: 'a + Key, V> FusedIterator for ValuesMut<'a, K, V> {}
-impl<'a, K: 'a + Key, V> FusedIterator for Drain<'a, K, V> {}
-impl<K: Key, V> FusedIterator for IntoIter<K, V> {}
+impl<'a, K: 'a + Key, V, const U: usize> FusedIterator for Drain<'a, K, V, U> {}
+impl<K: Key, V, const U: usize> FusedIterator for IntoIter<K, V, U> {}
 
 impl<'a, K: 'a + Key, V> ExactSizeIterator for Iter<'a, K, V> {}
 impl<'a, K: 'a + Key, V> ExactSizeIterator for IterMut<'a, K, V> {}
 impl<'a, K: 'a + Key, V> ExactSizeIterator for Keys<'a, K, V> {}
 impl<'a, K: 'a + Key, V> ExactSizeIterator for Values<'a, K, V> {}
 impl<'a, K: 'a + Key, V> ExactSizeIterator for ValuesMut<'a, K, V> {}
-impl<'a, K: 'a + Key, V> ExactSizeIterator for Drain<'a, K, V> {}
-impl<K: Key, V> ExactSizeIterator for IntoIter<K, V> {}
+impl<'a, K: 'a + Key, V, const U: usize> ExactSizeIterator for Drain<'a, K, V, U> {}
+impl<K: Key, V, const U: usize> ExactSizeIterator for IntoIter<K, V, U> {}
 
 #[cfg(test)]
 mod tests {
