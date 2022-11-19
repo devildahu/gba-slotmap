@@ -8,13 +8,13 @@
 
 #[cfg(all(nightly, any(doc, feature = "unstable")))]
 use alloc::collections::TryReserveError;
-use alloc::vec::Vec;
 use core::iter::FusedIterator;
 #[allow(unused_imports)] // MaybeUninit is only used on nightly at the moment.
 use core::mem::MaybeUninit;
 use core::ops::{Index, IndexMut};
 
 use crate::util::{Never, UnwrapUnchecked};
+use crate::vec::Vec;
 use crate::{DefaultKey, Key, KeyData};
 
 // A slot, which represents storage for an index and a current version.
@@ -22,21 +22,21 @@ use crate::{DefaultKey, Key, KeyData};
 #[derive(Debug, Clone)]
 struct Slot {
     // Even = vacant, odd = occupied.
-    version: u32,
+    version: u16,
 
     // An index when occupied, the next free slot otherwise.
-    idx_or_free: u32,
+    idx_or_free: u16,
 }
 
 /// Dense slot map, storage with stable unique keys.
 ///
 /// See [crate documentation](crate) for more details.
 #[derive(Debug)]
-pub struct DenseSlotMap<K: Key, V> {
-    keys: Vec<K>,
-    values: Vec<V>,
-    slots: Vec<Slot>,
-    free_head: u32,
+pub struct DenseSlotMap<K: Key, V, const U: usize> {
+    keys: Vec<K, U>,
+    values: Vec<V, U>,
+    slots: Vec<Slot, U>,
+    free_head: u16,
 }
 
 impl<V> DenseSlotMap<DefaultKey, V> {
@@ -108,10 +108,7 @@ impl<K: Key, V> DenseSlotMap<K, V> {
         // HopSlotMap does, and if we want keys to remain valid through
         // conversion we have to have one as well.
         let mut slots = Vec::with_capacity(capacity + 1);
-        slots.push(Slot {
-            idx_or_free: 0,
-            version: 0,
-        });
+        slots.push(Slot { idx_or_free: 0, version: 0 });
 
         DenseSlotMap {
             keys: Vec::with_capacity(capacity),
@@ -252,7 +249,10 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     /// ```
     #[inline(always)]
     pub fn insert(&mut self, value: V) -> K {
-        unsafe { self.try_insert_with_key::<_, Never>(move |_| Ok(value)).unwrap_unchecked_() }
+        unsafe {
+            self.try_insert_with_key::<_, Never>(move |_| Ok(value))
+                .unwrap_unchecked_()
+        }
     }
 
     /// Inserts a value given by `f` into the slot map. The key where the
@@ -277,7 +277,10 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     where
         F: FnOnce(K) -> V,
     {
-        unsafe { self.try_insert_with_key::<_, Never>(move |k| Ok(f(k))).unwrap_unchecked_() }
+        unsafe {
+            self.try_insert_with_key::<_, Never>(move |k| Ok(f(k)))
+                .unwrap_unchecked_()
+        }
     }
 
     /// Inserts a value given by `f` into the slot map. The key where the
@@ -305,7 +308,7 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     where
         F: FnOnce(K) -> Result<V, E>,
     {
-        if self.len() >= (core::u32::MAX - 1) as usize {
+        if self.len() >= (core::u16::MAX - 1) as usize {
             panic!("DenseSlotMap number of elements overflow");
         }
 
@@ -319,7 +322,7 @@ impl<K: Key, V> DenseSlotMap<K, V> {
             self.values.push(f(key)?);
             self.keys.push(key);
             self.free_head = slot.idx_or_free;
-            slot.idx_or_free = self.keys.len() as u32 - 1;
+            slot.idx_or_free = self.keys.len() as u16 - 1;
             slot.version = occupied_version;
             return Ok(key);
         }
@@ -330,21 +333,21 @@ impl<K: Key, V> DenseSlotMap<K, V> {
         self.keys.push(key);
         self.slots.push(Slot {
             version: 1,
-            idx_or_free: self.keys.len() as u32 - 1,
+            idx_or_free: self.keys.len() as u16 - 1,
         });
-        self.free_head = self.slots.len() as u32;
+        self.free_head = self.slots.len() as u16;
         Ok(key)
     }
 
     // Helper function to add a slot to the freelist. Returns the index that
     // was stored in the slot.
     #[inline(always)]
-    fn free_slot(&mut self, slot_idx: usize) -> u32 {
+    fn free_slot(&mut self, slot_idx: usize) -> u16 {
         let slot = &mut self.slots[slot_idx];
         let value_idx = slot.idx_or_free;
         slot.version = slot.version.wrapping_add(1);
         slot.idx_or_free = self.free_head;
-        self.free_head = slot_idx as u32;
+        self.free_head = slot_idx as u16;
         value_idx
     }
 
@@ -515,7 +518,10 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     /// ```
     pub unsafe fn get_unchecked(&self, key: K) -> &V {
         debug_assert!(self.contains_key(key));
-        let idx = self.slots.get_unchecked(key.data().idx as usize).idx_or_free;
+        let idx = self
+            .slots
+            .get_unchecked(key.data().idx as usize)
+            .idx_or_free;
         &self.values.get_unchecked(idx as usize)
     }
 
@@ -565,7 +571,10 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     /// ```
     pub unsafe fn get_unchecked_mut(&mut self, key: K) -> &mut V {
         debug_assert!(self.contains_key(key));
-        let idx = self.slots.get_unchecked(key.data().idx as usize).idx_or_free;
+        let idx = self
+            .slots
+            .get_unchecked(key.data().idx as usize)
+            .idx_or_free;
         self.values.get_unchecked_mut(idx as usize)
     }
 
@@ -781,9 +790,7 @@ impl<K: Key, V> DenseSlotMap<K, V> {
     /// assert_eq!(values, check);
     /// ```
     pub fn values_mut(&mut self) -> ValuesMut<K, V> {
-        ValuesMut {
-            inner: self.iter_mut(),
-        }
+        ValuesMut { inner: self.iter_mut() }
     }
 }
 
@@ -849,8 +856,8 @@ pub struct Drain<'a, K: 'a + Key, V: 'a> {
 /// provided by the [`IntoIterator`] trait.
 #[derive(Debug, Clone)]
 pub struct IntoIter<K, V> {
-    inner_keys: alloc::vec::IntoIter<K>,
-    inner_values: alloc::vec::IntoIter<V>,
+    inner_keys: arrayvec::IntoIter<K>,
+    inner_values: arrayvec::IntoIter<V>,
 }
 
 /// An iterator over the key-value pairs in a [`DenseSlotMap`].
@@ -890,9 +897,7 @@ pub struct Keys<'a, K: 'a + Key, V> {
 
 impl<'a, K: 'a + Key, V: 'a> Clone for Keys<'a, K, V> {
     fn clone(&self) -> Self {
-        Keys {
-            inner: self.inner.clone(),
-        }
+        Keys { inner: self.inner.clone() }
     }
 }
 
@@ -906,9 +911,7 @@ pub struct Values<'a, K: 'a + Key, V> {
 
 impl<'a, K: 'a + Key, V: 'a> Clone for Values<'a, K, V> {
     fn clone(&self) -> Self {
-        Values {
-            inner: self.inner.clone(),
-        }
+        Values { inner: self.inner.clone() }
     }
 }
 
@@ -1087,98 +1090,6 @@ impl<'a, K: 'a + Key, V> ExactSizeIterator for ValuesMut<'a, K, V> {}
 impl<'a, K: 'a + Key, V> ExactSizeIterator for Drain<'a, K, V> {}
 impl<K: Key, V> ExactSizeIterator for IntoIter<K, V> {}
 
-// Serialization with serde.
-#[cfg(feature = "serde")]
-mod serialize {
-    use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-
-    use super::*;
-
-    #[derive(Serialize, Deserialize)]
-    struct SerdeSlot<T> {
-        value: Option<T>,
-        version: u32,
-    }
-
-    impl<K: Key, V: Serialize> Serialize for DenseSlotMap<K, V> {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            let serde_slots: Vec<_> = self
-                .slots
-                .iter()
-                .map(|slot| SerdeSlot {
-                    value: if slot.version % 2 == 1 {
-                        self.values.get(slot.idx_or_free as usize)
-                    } else {
-                        None
-                    },
-                    version: slot.version,
-                })
-                .collect();
-            serde_slots.serialize(serializer)
-        }
-    }
-
-    impl<'de, K: Key, V: Deserialize<'de>> Deserialize<'de> for DenseSlotMap<K, V> {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            let serde_slots: Vec<SerdeSlot<V>> = Deserialize::deserialize(deserializer)?;
-            if serde_slots.len() >= u32::max_value() as usize {
-                return Err(de::Error::custom(&"too many slots"));
-            }
-
-            // Ensure the first slot exists and is empty for the sentinel.
-            if serde_slots.get(0).map_or(true, |slot| slot.version % 2 == 1) {
-                return Err(de::Error::custom(&"first slot not empty"));
-            }
-
-            // Rebuild slots, key and values.
-            let mut keys = Vec::new();
-            let mut values = Vec::new();
-            let mut slots = Vec::new();
-            slots.push(Slot {
-                idx_or_free: 0,
-                version: 0,
-            });
-
-            let mut next_free = serde_slots.len();
-            for (i, serde_slot) in serde_slots.into_iter().enumerate().skip(1) {
-                let occupied = serde_slot.version % 2 == 1;
-                if occupied ^ serde_slot.value.is_some() {
-                    return Err(de::Error::custom(&"inconsistent occupation in Slot"));
-                }
-
-                if let Some(value) = serde_slot.value {
-                    let kd = KeyData::new(i as u32, serde_slot.version);
-                    keys.push(kd.into());
-                    values.push(value);
-                    slots.push(Slot {
-                        version: serde_slot.version,
-                        idx_or_free: (keys.len() - 1) as u32,
-                    });
-                } else {
-                    slots.push(Slot {
-                        version: serde_slot.version,
-                        idx_or_free: next_free as u32,
-                    });
-                    next_free = i;
-                }
-            }
-
-            Ok(DenseSlotMap {
-                keys,
-                values,
-                slots,
-                free_head: next_free as u32,
-            })
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
@@ -1277,7 +1188,7 @@ mod tests {
     }
 
     quickcheck! {
-        fn qc_slotmap_equiv_hashmap(operations: Vec<(u8, u32)>) -> bool {
+        fn qc_slotmap_equiv_hashmap(operations: Vec<(u8, u16)>) -> bool {
             let mut hm = HashMap::new();
             let mut hm_keys = Vec::new();
             let mut unique_key = 0u32;

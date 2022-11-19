@@ -7,9 +7,9 @@ pub enum Never {}
 
 /// Returns if a is an older version than b, taking into account wrapping of
 /// versions.
-pub fn is_older_version(a: u32, b: u32) -> bool {
+pub fn is_older_version(a: u16, b: u16) -> bool {
     let diff = a.wrapping_sub(b);
-    diff >= (1 << 31)
+    diff >= (1 << 15)
 }
 
 /// An unwrapper that checks on debug, doesn't check on release.

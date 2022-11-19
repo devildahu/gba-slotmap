@@ -1,5 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/slotmap/1.0.6")]
-#![crate_name = "slotmap"]
+#![crate_name = "gba_slotmap"]
 #![cfg_attr(all(nightly, feature = "unstable"), feature(try_reserve))]
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 #![cfg_attr(all(nightly, doc), feature(doc_cfg))]
@@ -203,13 +202,9 @@
 //! [`stable-vec`]: https://crates.io/crates/stable-vec
 //! [`no_std`]: https://doc.rust-lang.org/1.7.0/book/no-stdlib.html
 
-extern crate alloc;
-
 // So our macros can refer to these.
 #[doc(hidden)]
 pub mod __impl {
-    #[cfg(feature = "serde")]
-    pub use serde::{Deserialize, Deserializer, Serialize, Serializer};
     pub use core::convert::From;
     pub use core::result::Result;
 }
@@ -218,12 +213,10 @@ pub mod basic;
 pub mod dense;
 pub mod hop;
 pub mod secondary;
-#[cfg(feature = "std")]
-pub mod sparse_secondary;
 pub(crate) mod util;
 
 use core::fmt::{self, Debug, Formatter};
-use core::num::NonZeroU32;
+use core::num::NonZeroU16;
 
 #[doc(inline)]
 pub use crate::basic::SlotMap;
@@ -233,10 +226,10 @@ pub use crate::dense::DenseSlotMap;
 pub use crate::hop::HopSlotMap;
 #[doc(inline)]
 pub use crate::secondary::SecondaryMap;
-#[cfg(feature = "std")]
-#[doc(inline)]
-pub use crate::sparse_secondary::SparseSecondaryMap;
 
+mod vec {
+    pub(crate) type Vec<T, const U: usize> = arrayvec::ArrayVec<T, U>;
+}
 // Keep Slottable for backwards compatibility, but warn about deprecation
 // and hide from documentation.
 #[doc(hidden)]
@@ -257,26 +250,26 @@ impl<T> Slottable for T {}
 /// unspecified.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KeyData {
-    idx: u32,
-    version: NonZeroU32,
+    idx: u16,
+    version: NonZeroU16,
 }
 
 impl KeyData {
-    fn new(idx: u32, version: u32) -> Self {
+    fn new(idx: u16, version: u16) -> Self {
         debug_assert!(version > 0);
 
         Self {
             idx,
-            version: unsafe { NonZeroU32::new_unchecked(version | 1) },
+            version: unsafe { NonZeroU16::new_unchecked(version | 1) },
         }
     }
 
     fn null() -> Self {
-        Self::new(core::u32::MAX, 1)
+        Self::new(core::u16::MAX, 1)
     }
 
     fn is_null(self) -> bool {
-        self.idx == core::u32::MAX
+        self.idx == core::u16::MAX
     }
 
     /// Returns the key data as a 64-bit integer. No guarantees about its value
@@ -302,7 +295,7 @@ impl KeyData {
     pub fn from_ffi(value: u64) -> Self {
         let idx = value & 0xffff_ffff;
         let version = (value >> 32) | 1; // Ensure version is odd.
-        Self::new(idx as u32, version as u32)
+        Self::new(idx as u16, version as u16)
     }
 }
 
@@ -468,34 +461,6 @@ macro_rules! new_key_type {
     () => {}
 }
 
-#[cfg(feature = "serde")]
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __serialize_key {
-    ( $name:ty ) => {
-        impl $crate::__impl::Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> $crate::__impl::Result<S::Ok, S::Error>
-            where
-                S: $crate::__impl::Serializer,
-            {
-                $crate::Key::data(self).serialize(serializer)
-            }
-        }
-
-        impl<'de> $crate::__impl::Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> $crate::__impl::Result<Self, D::Error>
-            where
-                D: $crate::__impl::Deserializer<'de>,
-            {
-                let key_data: $crate::KeyData =
-                    $crate::__impl::Deserialize::deserialize(deserializer)?;
-                Ok(key_data.into())
-            }
-        }
-    };
-}
-
-#[cfg(not(feature = "serde"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __serialize_key {
@@ -506,51 +471,6 @@ new_key_type! {
     /// The default slot map key type.
     pub struct DefaultKey;
 }
-
-// Serialization with serde.
-#[cfg(feature = "serde")]
-mod serialize {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use super::*;
-
-    #[derive(Serialize, Deserialize)]
-    pub struct SerKey {
-        idx: u32,
-        version: u32,
-    }
-
-    impl Serialize for KeyData {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            let ser_key = SerKey {
-                idx: self.idx,
-                version: self.version.get(),
-            };
-            ser_key.serialize(serializer)
-        }
-    }
-
-    impl<'de> Deserialize<'de> for KeyData {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            let mut ser_key: SerKey = Deserialize::deserialize(deserializer)?;
-
-            // Ensure a.is_null() && b.is_null() implies a == b.
-            if ser_key.idx == core::u32::MAX {
-                ser_key.version = 1;
-            }
-
-            ser_key.version |= 1; // Ensure version is odd.
-            Ok(Self::new(ser_key.idx, ser_key.version))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     // Intentionally no `use super::*;` because we want to test macro expansion
@@ -561,12 +481,12 @@ mod tests {
         use super::new_key_type;
 
         // Clobber namespace with clashing names - should still work.
-        trait Serialize { }
-        trait Deserialize { }
-        trait Serializer { }
-        trait Deserializer { }
-        trait Key { }
-        trait From { }
+        trait Serialize {}
+        trait Deserialize {}
+        trait Serializer {}
+        trait Deserializer {}
+        trait Key {}
+        trait From {}
         struct Result;
         struct KeyData;
 
@@ -586,7 +506,7 @@ mod tests {
         assert!(is_older(0, 1));
         assert!(is_older(0, 1 << 31));
         assert!(!is_older(0, (1 << 31) + 1));
-        assert!(is_older(u32::MAX, 0));
+        assert!(is_older(u16::MAX, 0));
     }
 
     #[test]
@@ -619,23 +539,5 @@ mod tests {
         let _ = sscm.keys().clone();
         let _ = sscm.values().clone();
         let _ = sscm.iter().clone();
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn key_serde() {
-        use super::*;
-
-        // Check round-trip through serde.
-        let mut sm = SlotMap::new();
-        let k = sm.insert(42);
-        let ser = serde_json::to_string(&k).unwrap();
-        let de: DefaultKey = serde_json::from_str(&ser).unwrap();
-        assert_eq!(k, de);
-
-        // Even if a malicious entity sends up even (unoccupied) versions in the
-        // key, we make the version point to the occupied version.
-        let malicious: KeyData = serde_json::from_str(&r#"{"idx":0,"version":4}"#).unwrap();
-        assert_eq!(malicious.version.get(), 5);
     }
 }
